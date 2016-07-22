@@ -138,42 +138,47 @@ class Sieve(object):
         x = np.hstack([(x - self.mean_x), np.zeros((ns, self.n_hidden))])  # Allocate space and fill in
         self.ws = np.zeros((self.n_hidden, nv + self.n_hidden))
 
-        for j in range(self.n_hidden):
-            if self.verbose:
-                print 'updating %d' % j
-            self.moments.append({})  # Dictionary of moments for this level
-            m = self.moments[j]  # Abbreviation
-            nv_k = nv + j  # Number of variables on this level
-            m["X_i^2"] = (np.einsum("li,li->i", x[:, :nv_k], x[:, :nv_k]) / (ns - 1)).clip(1e-10)  # Unbiased variance
+        try:
+            for j in range(self.n_hidden):
+                print "Processed for " + str(j) + " layers"
+                if self.verbose:
+                    print 'updating %d' % j
+                self.moments.append({})  # Dictionary of moments for this level
+                m = self.moments[j]  # Abbreviation
+                nv_k = nv + j  # Number of variables on this level
+                m["X_i^2"] = (np.einsum("li,li->i", x[:, :nv_k], x[:, :nv_k]) / (ns - 1)).clip(1e-10)  # Unbiased variance
 
-            best_tc = -np.inf
-            for _ in range(self.repeat):
-                self.ws[j][:nv_k] = np.random.randn(nv_k) / np.sqrt(nv) * self.noise / np.sqrt(
-                        m["X_i^2"])  # Random initialization
+                best_tc = -np.inf
+                for _ in range(self.repeat):
+                    self.ws[j][:nv_k] = np.random.randn(nv_k) / np.sqrt(nv) * self.noise / np.sqrt(
+                            m["X_i^2"])  # Random initialization
+                    self.update_parameters(x, j)  # Update moments and normalize w
+                    for i_loop in range(self.max_iter):
+                        self.ws[j, :nv_k] = self.noise ** 2 * m["X_i Y"] / (
+                        m["X_i^2"] * m["Y^2"] - m["X_i Y"] ** 2)  # Update w, Eq. 9 in paper
+                        self.update_parameters(x, j)  # Update moments
+
+                        self.tc_history[j].append(self.tc_j(j))
+                        if self.verbose:
+                            print 'TC = %0.5f' % self.tc_history[j][-1]
+                        if np.abs(self.tc_history[j][-1] - self.tc_history[j][-2]) < self.tol:
+                            break  # Stop if converged
+                    else:
+                        if self.verbose:
+                            print "Warning: Convergence not achieved in %d iterations. Increase max_iter." % self.max_iter
+                    if self.tc_j(j) > best_tc:
+                        best_w = np.copy(self.ws[j, :nv_k])
+                        best_tc = self.tc_j(j)
+                self.ws[j][:nv_k] = best_w
                 self.update_parameters(x, j)  # Update moments and normalize w
-                for i_loop in range(self.max_iter):
-                    self.ws[j, :nv_k] = self.noise ** 2 * m["X_i Y"] / (
-                    m["X_i^2"] * m["Y^2"] - m["X_i Y"] ** 2)  # Update w, Eq. 9 in paper
-                    self.update_parameters(x, j)  # Update moments
 
-                    self.tc_history[j].append(self.tc_j(j))
-                    if self.verbose:
-                        print 'TC = %0.5f' % self.tc_history[j][-1]
-                    if np.abs(self.tc_history[j][-1] - self.tc_history[j][-2]) < self.tol:
-                        break  # Stop if converged
-                else:
-                    if self.verbose:
-                        print "Warning: Convergence not achieved in %d iterations. Increase max_iter." % self.max_iter
-                if self.tc_j(j) > best_tc:
-                    best_w = np.copy(self.ws[j, :nv_k])
-                    best_tc = self.tc_j(j)
-            self.ws[j][:nv_k] = best_w
-            self.update_parameters(x, j)  # Update moments and normalize w
+                x[:, nv_k] = np.dot(self.ws[j], x.T)  # This is just Y
+                for i in range(nv_k):
+                    x[:, i] -= m['X_i Y'][i] / (m["Y^2"] - self.noise ** 2) * (
+                    x[:, nv_k] + self.noise * np.random.randn(ns))
+        except KeyboardInterrupt:
+            return self
 
-            x[:, nv_k] = np.dot(self.ws[j], x.T)  # This is just Y
-            for i in range(nv_k):
-                x[:, i] -= m['X_i Y'][i] / (m["Y^2"] - self.noise ** 2) * (
-                x[:, nv_k] + self.noise * np.random.randn(ns))
         return self
 
     def transform(self, x, remainder=False, level=-1):
